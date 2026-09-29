@@ -34,6 +34,16 @@ namespace MapTest
 
             string serverConfigData;
 
+            Console.WriteLine("MBII Map Tester");
+            Console.WriteLine("----------------------------");
+            Console.WriteLine("MapTest.exe must be in the same folder as your maps.");
+            Console.WriteLine("Each map needs its own folder containing the uncompressed map files (not a .pk3),");
+            Console.WriteLine("named the same as the map, with the .bsp inside a maps folder, e.g.");
+            Console.WriteLine(@"    mb2_mymap\maps\mb2_mymap.bsp");
+            Console.WriteLine($"Looking for maps in: {workingDir}");
+            Console.WriteLine("----------------------------");
+            Console.WriteLine(" ");
+
             /* Conf file saves the GameData folder (line 1) and MBII Launcher exe (line 2) */
             string[] savedPaths = File.Exists(confFile) ? File.ReadAllLines(confFile) : new string[0];
 
@@ -98,6 +108,14 @@ namespace MapTest
                     i++;
                 }
                 
+            }
+
+            if (maps.Count == 0)
+            {
+                Console.WriteLine($"No map folders found in {workingDir}");
+                Console.WriteLine("Put MapTest.exe in the folder that contains your map folders and run it again");
+                Console.ReadLine();
+                Environment.Exit(0);
             }
 
             do
