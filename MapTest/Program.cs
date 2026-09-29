@@ -222,36 +222,15 @@ namespace MapTest
             {
 
 
-                var clientArgs = "+ set fs_game \"MBII\" +connect 127.0.0.1:29071";
                 var serverArgs = $"+set dedicated 2 +set net_port 29071 +set fs_game \"MBII\" + exec \"server_config_default.cfg\" + set fs_direbeforepak \"1\" +set mbmode 2 +mbmode \"2\" +map \"{mapName}\"";
 
-                Console.WriteLine("Following Commands will be run");
-                Console.WriteLine($"Client Command: \"{clientEXE}\" {clientArgs}");
+                Console.WriteLine("Following Command will be run");
                 Console.WriteLine($"Server Command: \"{dedicatedEXE}\" {serverArgs}");
                 Console.WriteLine("----------------------------");
 
-                Thread.Sleep(2);
-
+                /* MBII anti-cheat rejects a client started by anything other than the launcher,
+                   so only the server is started here and the user joins from the launcher */
                 EnsureLauncherRunning(launcherEXE);
-
-                Console.WriteLine($"Launching Client");
-
-                Process client = null;
-                var clientThread = new Thread(() =>
-                {
-                    Thread.CurrentThread.IsBackground = true;
-                    try
-                    {
-                        client = StartProcess("Client", new ProcessStartInfo(clientEXE, clientArgs));
-                    }
-                    catch (Exception ex)
-                    {
-                        Log.Error("Failed to start the client", ex);
-                        Console.WriteLine($"Failed to start the client: {ex.Message}");
-                    }
-                });
-
-                clientThread.Start();
 
                 Console.WriteLine($"Launching Dedicated Server");
 
@@ -273,18 +252,31 @@ namespace MapTest
                     Console.WriteLine($"Failed to start the dedicated server: {ex.Message}");
                 }
 
-                clientThread.Join();
-
-                /* Give both a few seconds, then record whether either has already died */
+                /* Give it a few seconds, then record whether it has already died */
                 Thread.Sleep(5000);
-                CheckStillRunning("Client", client);
                 CheckStillRunning("Dedicated server", server);
 
+                Console.WriteLine(" ");
+                Console.WriteLine("----------------------------");
+
+                if (server == null || server.HasExited)
+                {
+                    Console.WriteLine("The dedicated server is not running, check the log for details");
+                    Console.WriteLine($"Log written to {Log.FilePath}");
+                    Console.ReadLine();
+                    Environment.Exit(0);
+                }
+
+                Console.WriteLine($"Server is running {mapName}. To join:");
+                Console.WriteLine("  1. Press Play in the MBII Launcher");
+                Console.WriteLine("  2. Open the console (Shift + ~) and enter:");
+                Console.WriteLine("       /connect 127.0.0.1:29071");
+                Console.WriteLine("Keep this window and the launcher open while testing.");
+                Console.WriteLine("----------------------------");
                 Console.WriteLine($"Log written to {Log.FilePath}");
 
                 Console.ReadLine();
 
-                CheckStillRunning("Client", client);
                 CheckStillRunning("Dedicated server", server);
 
             }
