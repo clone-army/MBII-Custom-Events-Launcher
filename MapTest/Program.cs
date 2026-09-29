@@ -27,6 +27,7 @@ namespace MapTest
             string mbiiPath;
             string dedicatedEXE;
             string clientEXE;
+            string launcherEXE;
             string serverConfig;
 
             string serverConfigData;
@@ -76,6 +77,7 @@ namespace MapTest
 
             dedicatedEXE = Path.Combine(openjkPath, "mbiided.x86.exe");
             clientEXE = Path.Combine(openjkPath, "mbii.x86.exe");
+            launcherEXE = Path.Combine(openjkPath, "MBIILauncher.exe");
             mbiiPath = Path.Combine(openjkPath, "MBII");
             serverConfig = Path.Combine(mbiiPath, "server_config_default.cfg");
 
@@ -90,6 +92,14 @@ namespace MapTest
             if (!File.Exists(clientEXE))
             {
                 Console.WriteLine($"Unable to find {clientEXE}");
+                Console.ReadLine();
+                Environment.Exit(0);
+            }
+
+            if (!File.Exists(launcherEXE))
+            {
+                Console.WriteLine($"Unable to find {launcherEXE}");
+                Console.WriteLine("MBIILauncher.exe must be in your GameData folder");
                 Console.ReadLine();
                 Environment.Exit(0);
             }
@@ -182,6 +192,8 @@ namespace MapTest
 
                 Thread.Sleep(2);
 
+                EnsureLauncherRunning(launcherEXE);
+
                 Console.WriteLine($"Launching Client");
 
                 var clientThread = new Thread(() =>
@@ -219,6 +231,28 @@ namespace MapTest
 
             Console.ReadLine();
 
+        }
+
+        /* MBII anti-cheat requires the MBII Launcher to be open while the client runs */
+        static void EnsureLauncherRunning(string launcherEXE)
+        {
+            if (Process.GetProcessesByName(Path.GetFileNameWithoutExtension(launcherEXE)).Length > 0)
+            {
+                Console.WriteLine("MBII Launcher is already running");
+                return;
+            }
+
+            Console.WriteLine("Starting MBII Launcher");
+
+            var startinfo = new ProcessStartInfo();
+            startinfo.FileName = launcherEXE;
+            startinfo.WorkingDirectory = Path.GetDirectoryName(launcherEXE);
+            startinfo.UseShellExecute = true;
+
+            Process.Start(startinfo);
+
+            Console.WriteLine("Wait for the launcher to finish loading/updating, leave it open, then press Enter to continue");
+            Console.ReadLine();
         }
 
         
