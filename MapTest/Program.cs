@@ -1,8 +1,11 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
+using System.Linq;
+using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Threading;
 
 namespace MapTest
@@ -12,11 +15,37 @@ namespace MapTest
 
         public static string workingDir = Directory.GetCurrentDirectory();
         public static string confFile = Path.Combine(workingDir, "openjk.conf");
+        public static string logFile = Path.Combine(workingDir, "MapTest.log");
 
         public const string defaultGameDataPath = @"C:\Program Files (x86)\Steam\steamapps\common\Jedi Academy\GameData";
         public const string defaultLauncherEXE = @"C:\Program Files (x86)\MBII Launcher\MBIILauncher.exe";
 
         static void Main(string[] args)
+        {
+            Log.Open(logFile);
+
+            try
+            {
+                Run(args);
+            }
+            catch (Exception ex)
+            {
+                Log.Error("Unhandled error, MapTest has stopped", ex);
+                Console.WriteLine();
+                Console.WriteLine("Something went wrong:");
+                Console.WriteLine($"    {ex.Message}");
+                Console.WriteLine($"Full details have been written to {Log.FilePath}");
+                Console.WriteLine("Please send that file to whoever is helping you. Press Enter to exit.");
+                Console.ReadLine();
+            }
+            finally
+            {
+                Log.Info("MapTest exiting");
+                Log.Close();
+            }
+        }
+
+        static void Run(string[] args)
         {
 
             string choice;
@@ -41,27 +70,38 @@ namespace MapTest
             Console.WriteLine("named the same as the map, with the .bsp inside a maps folder, e.g.");
             Console.WriteLine(@"    mb2_mymap\maps\mb2_mymap.bsp");
             Console.WriteLine($"Looking for maps in: {workingDir}");
+            Console.WriteLine($"Writing log to: {Log.FilePath}");
             Console.WriteLine("----------------------------");
             Console.WriteLine(" ");
 
+            LogEnvironment(args);
+
             /* Conf file saves the GameData folder (line 1) and MBII Launcher exe (line 2) */
             string[] savedPaths = File.Exists(confFile) ? File.ReadAllLines(confFile) : new string[0];
+            Log.Info($"Conf file {confFile} {(File.Exists(confFile) ? $"found with {savedPaths.Length} line(s)" : "not found")}");
+            for (int line = 0; line < savedPaths.Length; line++)
+            {
+                Log.Info($"    conf line {line + 1}: {savedPaths[line]}");
+            }
 
             gameDataPath = ResolvePath(
+                "GameData folder",
                 savedPaths.Length > 0 ? savedPaths[0] : null,
                 defaultGameDataPath,
-                IsGameDataFolder,
+                GameDataProblem,
                 "Please enter your Jedi Academy GameData folder",
                 "That folder is not a Jedi Academy GameData folder with MBII installed (needs mbiided.x86.exe, mbii.x86.exe and an MBII folder)");
 
             launcherEXE = ResolvePath(
+                "MBII Launcher",
                 savedPaths.Length > 1 ? savedPaths[1] : null,
                 defaultLauncherEXE,
-                path => File.Exists(path) && Path.GetFileName(path).Equals("MBIILauncher.exe", StringComparison.OrdinalIgnoreCase),
+                LauncherProblem,
                 "Please enter the full path to MBIILauncher.exe",
                 "Unable to find MBIILauncher.exe at that path");
 
             File.WriteAllLines(confFile, new[] { gameDataPath, launcherEXE });
+            Log.Info($"Saved paths to {confFile}");
 
             /* Now some Checking */
 
@@ -71,19 +111,33 @@ namespace MapTest
             mbiiPath = Path.Combine(gameDataPath, "MBII");
             serverConfig = Path.Combine(mbiiPath, "server_config_default.cfg");
 
+            LogFile("Dedicated server exe", dedicatedEXE);
+            LogFile("Client exe", clientEXE);
+            LogFile("MBII Launcher exe", launcherEXE);
+            LogFile("Server config", serverConfig);
 
             if (!File.Exists(serverConfig))
             {
+                Log.Error($"Unable to find server config {serverConfig}. Contents of {mbiiPath}: {ListFolder(mbiiPath)}");
                 Console.WriteLine($"Unable to find {serverConfig}");
+                Console.WriteLine($"See {Log.FilePath} for details");
                 Console.ReadLine();
                 Environment.Exit(0);
             }
-            
+
 
             // Force MBMODE 2
             serverConfigData = File.ReadAllText(serverConfig);
-            serverConfigData = serverConfigData.Replace("g_Authenticity \"0\"", "g_Authenticity \"2\"");
-            File.WriteAllText(serverConfig, serverConfigData);
+            if (serverConfigData.Contains("g_Authenticity \"0\""))
+            {
+                serverConfigData = serverConfigData.Replace("g_Authenticity \"0\"", "g_Authenticity \"2\"");
+                File.WriteAllText(serverConfig, serverConfigData);
+                Log.Info("Changed g_Authenticity \"0\" to \"2\" in server config");
+            }
+            else
+            {
+                Log.Info($"g_Authenticity \"0\" not found in server config, left unchanged (g_Authenticity lines: {FindLines(serverConfigData, "g_Authenticity")})");
+            }
 
             Console.WriteLine("----------------------------");
             Console.WriteLine($"Jedi Academy GameData Folder: {gameDataPath}");
@@ -97,6 +151,8 @@ namespace MapTest
             Console.WriteLine("----------------------------");
             Console.WriteLine(" ");
 
+            Log.Info($"Scanning {workingDir} for map folders");
+
             foreach (string folder in Directory.GetDirectories(workingDir))
             {
 
@@ -105,13 +161,19 @@ namespace MapTest
                 {
                     maps.Add(folder);
                     Console.WriteLine($"{i}. {Path.GetFileName(folder)}");
+                    Log.Info($"    {i}. {Path.GetFileName(folder)}");
                     i++;
                 }
-                
+                else
+                {
+                    Log.Info($"    skipped hidden folder {Path.GetFileName(folder)}");
+                }
+
             }
 
             if (maps.Count == 0)
             {
+                Log.Error($"No map folders found in {workingDir}. Contents: {ListFolder(workingDir)}");
                 Console.WriteLine($"No map folders found in {workingDir}");
                 Console.WriteLine("Put MapTest.exe in the folder that contains your map folders and run it again");
                 Console.ReadLine();
@@ -128,36 +190,44 @@ namespace MapTest
                 if (mapChoice == 0  || mapChoice  > maps.Count)
                 {
                     Console.WriteLine($"Invalid Selection");
+                    Log.Info($"Invalid map selection entered: '{choice}'");
                 }
 
             }
             while (mapChoice == 0 || mapChoice > maps.Count);
 
             map = maps[mapChoice-1];
+            string mapName = Path.GetFileName(map);
 
-            Console.WriteLine($"Launching {Path.GetFileName(map)}");
+            Log.Info($"Selected map {mapChoice}: {mapName} ({map})");
+            CheckMapLayout(map, mapName);
 
-            Console.WriteLine($"Creating PK3 For {Path.GetFileName(map)}");
+            Console.WriteLine($"Launching {mapName}");
 
-            var finalDestination = Path.Combine(gameDataPath, "MBII", Path.GetFileName(map) + ".pk3");
+            Console.WriteLine($"Creating PK3 For {mapName}");
+
+            var finalDestination = Path.Combine(gameDataPath, "MBII", mapName + ".pk3");
 
             if (File.Exists(finalDestination))
             {
+                Log.Info($"Deleting existing {finalDestination}");
                 File.Delete(finalDestination);
             }
 
+            Log.Info($"Zipping {map} to {finalDestination}");
             ZipFile.CreateFromDirectory(map, finalDestination) ;
+            LogPk3(finalDestination);
 
             if (Directory.Exists(Path.GetDirectoryName(finalDestination)))
             {
 
-        
-                var clientCommand = clientEXE + " + set fs_game \"MBII\" +connect 127.0.0.1:29071";
-                var serverCommand = dedicatedEXE + " +set dedicated 2 +set net_port 29071 +set fs_game \"MBII\" + exec \"server_config_default.cfg\" + set fs_direbeforepak \"1\" +set mbmode 2 +mbmode \"2\" +devmap \"{Path.GetFileName(map)}\"";
+
+                var clientArgs = "+ set fs_game \"MBII\" +connect 127.0.0.1:29071";
+                var serverArgs = $"+set dedicated 2 +set net_port 29071 +set fs_game \"MBII\" + exec \"server_config_default.cfg\" + set fs_direbeforepak \"1\" +set mbmode 2 +mbmode \"2\" +map \"{mapName}\"";
 
                 Console.WriteLine("Following Commands will be run");
-                Console.WriteLine($"Client Command: {clientCommand}");
-                Console.WriteLine($"Server Command: {serverCommand}");
+                Console.WriteLine($"Client Command: \"{clientEXE}\" {clientArgs}");
+                Console.WriteLine($"Server Command: \"{dedicatedEXE}\" {serverArgs}");
                 Console.WriteLine("----------------------------");
 
                 Thread.Sleep(2);
@@ -166,36 +236,62 @@ namespace MapTest
 
                 Console.WriteLine($"Launching Client");
 
+                Process client = null;
                 var clientThread = new Thread(() =>
                 {
                     Thread.CurrentThread.IsBackground = true;
-                    System.Diagnostics.Process.Start(clientEXE, "+ set fs_game \"MBII\" +connect 127.0.0.1:29071");
+                    try
+                    {
+                        client = StartProcess("Client", new ProcessStartInfo(clientEXE, clientArgs));
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Error("Failed to start the client", ex);
+                        Console.WriteLine($"Failed to start the client: {ex.Message}");
+                    }
                 });
 
                 clientThread.Start();
 
                 Console.WriteLine($"Launching Dedicated Server");
-             
+
                 var startinfo = new ProcessStartInfo();
                 startinfo.FileName = dedicatedEXE;
-                startinfo.Arguments = $"+set dedicated 2 +set net_port 29071 +set fs_game \"MBII\" + exec \"server_config_default.cfg\" + set fs_direbeforepak \"1\" +set mbmode 2 +mbmode \"2\" +map \"{Path.GetFileName(map)}\"";
+                startinfo.Arguments = serverArgs;
+                startinfo.RedirectStandardOutput = false;
+                startinfo.RedirectStandardInput = true;
+                startinfo.UseShellExecute = false;
 
-                var process = new Process();
-                process.StartInfo = startinfo;
-                process.StartInfo.RedirectStandardOutput = false;
-                process.StartInfo.RedirectStandardInput = true;
-                process.StartInfo.UseShellExecute = false;
+                Process server = null;
+                try
+                {
+                    server = StartProcess("Dedicated server", startinfo);
+                }
+                catch (Exception ex)
+                {
+                    Log.Error("Failed to start the dedicated server", ex);
+                    Console.WriteLine($"Failed to start the dedicated server: {ex.Message}");
+                }
 
-                process.Start();
+                clientThread.Join();
 
-                Thread.Sleep(20);
+                /* Give both a few seconds, then record whether either has already died */
+                Thread.Sleep(5000);
+                CheckStillRunning("Client", client);
+                CheckStillRunning("Dedicated server", server);
+
+                Console.WriteLine($"Log written to {Log.FilePath}");
 
                 Console.ReadLine();
+
+                CheckStillRunning("Client", client);
+                CheckStillRunning("Dedicated server", server);
 
             }
             else
             {
                 Console.WriteLine($"Directory Not found: {finalDestination}");
+                Log.Error($"Directory Not found: {Path.GetDirectoryName(finalDestination)}");
 
             }
 
@@ -203,25 +299,59 @@ namespace MapTest
 
         }
 
-        static bool IsGameDataFolder(string path)
+        /* Returns null when the folder is a usable GameData folder, otherwise why it isn't */
+        static string GameDataProblem(string path)
         {
-            return File.Exists(Path.Combine(path, "mbiided.x86.exe"))
-                && File.Exists(Path.Combine(path, "mbii.x86.exe"))
-                && Directory.Exists(Path.Combine(path, "MBII"));
+            if (!Directory.Exists(path))
+            {
+                return "folder does not exist";
+            }
+
+            var missing = new List<string>();
+            if (!File.Exists(Path.Combine(path, "mbiided.x86.exe"))) missing.Add("mbiided.x86.exe");
+            if (!File.Exists(Path.Combine(path, "mbii.x86.exe"))) missing.Add("mbii.x86.exe");
+            if (!Directory.Exists(Path.Combine(path, "MBII"))) missing.Add(@"MBII\ folder");
+
+            return missing.Count == 0 ? null : $"missing {string.Join(", ", missing)} (folder contains: {ListFolder(path)})";
+        }
+
+        static string LauncherProblem(string path)
+        {
+            if (!Path.GetFileName(path).Equals("MBIILauncher.exe", StringComparison.OrdinalIgnoreCase))
+            {
+                return "file name is not MBIILauncher.exe";
+            }
+
+            return File.Exists(path) ? null : "file does not exist";
         }
 
         /* Use the saved path, then the default, otherwise keep asking until a valid path is entered */
-        static string ResolvePath(string savedPath, string defaultPath, Func<string, bool> isValid, string prompt, string error)
+        static string ResolvePath(string name, string savedPath, string defaultPath, Func<string, string> problem, string prompt, string error)
         {
-            if (!string.IsNullOrWhiteSpace(savedPath) && isValid(savedPath.Trim()))
+            string why;
+
+            if (!string.IsNullOrWhiteSpace(savedPath))
             {
-                return savedPath.Trim();
+                why = problem(savedPath.Trim());
+                if (why == null)
+                {
+                    Log.Info($"{name}: using saved path {savedPath.Trim()}");
+                    return savedPath.Trim();
+                }
+                Log.Warn($"{name}: saved path {savedPath.Trim()} rejected, {why}");
+            }
+            else
+            {
+                Log.Info($"{name}: no saved path");
             }
 
-            if (isValid(defaultPath))
+            why = problem(defaultPath);
+            if (why == null)
             {
+                Log.Info($"{name}: using default path {defaultPath}");
                 return defaultPath;
             }
+            Log.Warn($"{name}: default path {defaultPath} rejected, {why}");
 
             while (true)
             {
@@ -229,11 +359,14 @@ namespace MapTest
                 Console.WriteLine("----------------------------");
                 string path = (Console.ReadLine() ?? "").Trim().Trim('"');
 
-                if (path.Length > 0 && isValid(path))
+                why = path.Length == 0 ? "nothing entered" : problem(path);
+                if (why == null)
                 {
+                    Log.Info($"{name}: using entered path {path}");
                     return path;
                 }
 
+                Log.Warn($"{name}: entered path '{path}' rejected, {why}");
                 Console.WriteLine(error);
             }
         }
@@ -241,8 +374,10 @@ namespace MapTest
         /* MBII anti-cheat requires the MBII Launcher to be open while the client runs */
         static void EnsureLauncherRunning(string launcherEXE)
         {
-            if (Process.GetProcessesByName(Path.GetFileNameWithoutExtension(launcherEXE)).Length > 0)
+            var running = Process.GetProcessesByName(Path.GetFileNameWithoutExtension(launcherEXE));
+            if (running.Length > 0)
             {
+                Log.Info($"MBII Launcher already running (PID {string.Join(", ", running.Select(p => p.Id))})");
                 Console.WriteLine("MBII Launcher is already running");
                 return;
             }
@@ -254,15 +389,234 @@ namespace MapTest
             startinfo.WorkingDirectory = Path.GetDirectoryName(launcherEXE);
             startinfo.UseShellExecute = true;
 
-            Process.Start(startinfo);
+            try
+            {
+                StartProcess("MBII Launcher", startinfo);
+            }
+            catch (Exception ex)
+            {
+                Log.Error("Failed to start the MBII Launcher", ex);
+                Console.WriteLine($"Failed to start the MBII Launcher: {ex.Message}");
+                Console.WriteLine("Start it yourself, leave it open, then press Enter to continue");
+                Console.ReadLine();
+                return;
+            }
 
             Console.WriteLine("Wait for the launcher to finish loading/updating, leave it open, then press Enter to continue");
             Console.ReadLine();
+
+            running = Process.GetProcessesByName(Path.GetFileNameWithoutExtension(launcherEXE));
+            if (running.Length > 0)
+            {
+                Log.Info($"MBII Launcher is running (PID {string.Join(", ", running.Select(p => p.Id))})");
+            }
+            else
+            {
+                Log.Warn("MBII Launcher is not running after the user pressed Enter, the client may fail anti-cheat");
+            }
         }
 
-        
+        static Process StartProcess(string name, ProcessStartInfo startinfo)
+        {
+            Log.Info($"Starting {name}");
+            Log.Info($"    FileName:         {startinfo.FileName}");
+            Log.Info($"    Arguments:        {startinfo.Arguments}");
+            Log.Info($"    WorkingDirectory: {(string.IsNullOrEmpty(startinfo.WorkingDirectory) ? $"(not set, inherits {Directory.GetCurrentDirectory()})" : startinfo.WorkingDirectory)}");
+            Log.Info($"    UseShellExecute:  {startinfo.UseShellExecute}");
 
+            var process = Process.Start(startinfo);
 
+            if (process == null)
+            {
+                Log.Warn($"{name}: Process.Start returned no process (it may have handed off to an existing instance)");
+                return null;
+            }
 
+            Log.Info($"{name} started, PID {process.Id}");
+            return process;
+        }
+
+        static void CheckStillRunning(string name, Process process)
+        {
+            if (process == null)
+            {
+                Log.Warn($"{name}: no process to check (it did not start)");
+                return;
+            }
+
+            try
+            {
+                if (process.HasExited)
+                {
+                    Log.Error($"{name} (PID {process.Id}) has exited with code {process.ExitCode} (0x{process.ExitCode:X8}) at {process.ExitTime:HH:mm:ss}, it ran for {(process.ExitTime - process.StartTime).TotalSeconds:0.0}s");
+                    Console.WriteLine($"{name} has closed (exit code {process.ExitCode}), see {Log.FilePath}");
+                }
+                else
+                {
+                    Log.Info($"{name} (PID {process.Id}) is still running");
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"{name}: unable to check process state, {ex.Message}");
+            }
+        }
+
+        /* Warn about the common layout mistakes, the game won't find the map if the bsp isn't at maps\<name>.bsp */
+        static void CheckMapLayout(string map, string mapName)
+        {
+            try
+            {
+                var files = Directory.GetFiles(map, "*", SearchOption.AllDirectories);
+                Log.Info($"Map folder contains {files.Length} file(s), {files.Sum(f => new FileInfo(f).Length):N0} bytes");
+                foreach (var f in files.Take(200))
+                {
+                    Log.Info($"    {Path.GetRelativePath(map, f)}");
+                }
+                if (files.Length > 200)
+                {
+                    Log.Info($"    ... and {files.Length - 200} more");
+                }
+
+                var expectedBsp = Path.Combine(map, "maps", mapName + ".bsp");
+                if (File.Exists(expectedBsp))
+                {
+                    Log.Info($"Found expected bsp {expectedBsp}");
+                    return;
+                }
+
+                var bsps = files.Where(f => f.EndsWith(".bsp", StringComparison.OrdinalIgnoreCase)).ToList();
+                var pk3s = files.Where(f => f.EndsWith(".pk3", StringComparison.OrdinalIgnoreCase)).ToList();
+
+                Log.Warn($"Expected bsp not found at {expectedBsp}");
+                if (bsps.Count > 0)
+                {
+                    Log.Warn($"bsp file(s) found instead: {string.Join(", ", bsps.Select(f => Path.GetRelativePath(map, f)))}");
+                }
+                if (pk3s.Count > 0)
+                {
+                    Log.Warn($"pk3 file(s) found inside the map folder, these must be extracted: {string.Join(", ", pk3s.Select(f => Path.GetRelativePath(map, f)))}");
+                }
+
+                Console.WriteLine($"WARNING: {Path.Combine(mapName, "maps", mapName + ".bsp")} not found, the map will probably fail to load");
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"Unable to inspect map folder {map}, {ex.Message}");
+            }
+        }
+
+        static void LogPk3(string pk3)
+        {
+            try
+            {
+                using var zip = ZipFile.OpenRead(pk3);
+                Log.Info($"Created {pk3}, {new FileInfo(pk3).Length:N0} bytes, {zip.Entries.Count} entries");
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"Unable to read back {pk3}, {ex.Message}");
+            }
+        }
+
+        static void LogEnvironment(string[] args)
+        {
+            Log.Info($"MapTest version {Assembly.GetExecutingAssembly().GetName().Version}");
+            Log.Info($"Started {DateTime.Now:yyyy-MM-dd HH:mm:ss zzz}");
+            Log.Info($"OS: {RuntimeInformation.OSDescription} ({RuntimeInformation.OSArchitecture}), process {RuntimeInformation.ProcessArchitecture}");
+            Log.Info($".NET: {RuntimeInformation.FrameworkDescription}");
+            Log.Info($"Exe path: {Environment.ProcessPath}");
+            Log.Info($"Working directory: {workingDir}");
+            Log.Info($"Arguments: {(args.Length == 0 ? "(none)" : string.Join(" ", args))}");
+        }
+
+        static void LogFile(string name, string path)
+        {
+            if (File.Exists(path))
+            {
+                var info = new FileInfo(path);
+                var version = FileVersionInfo.GetVersionInfo(path).FileVersion;
+                Log.Info($"{name}: {path} ({info.Length:N0} bytes, modified {info.LastWriteTime:yyyy-MM-dd HH:mm}{(string.IsNullOrEmpty(version) ? "" : $", version {version}")})");
+            }
+            else
+            {
+                Log.Warn($"{name}: {path} does not exist");
+            }
+        }
+
+        static string ListFolder(string path)
+        {
+            try
+            {
+                var entries = Directory.GetFileSystemEntries(path).Select(Path.GetFileName).ToList();
+                if (entries.Count == 0) return "(empty)";
+                var shown = string.Join(", ", entries.Take(50));
+                return entries.Count > 50 ? $"{shown}, ... and {entries.Count - 50} more" : shown;
+            }
+            catch (Exception ex)
+            {
+                return $"(unable to list: {ex.Message})";
+            }
+        }
+
+        static string FindLines(string text, string search)
+        {
+            var lines = text.Split('\n').Where(l => l.Contains(search, StringComparison.OrdinalIgnoreCase)).Select(l => l.Trim()).ToList();
+            return lines.Count == 0 ? "(none)" : string.Join(" | ", lines);
+        }
+
+    }
+
+    /* Writes a timestamped MapTest.log next to the maps so failures can be diagnosed afterwards */
+    static class Log
+    {
+        static StreamWriter writer;
+        static readonly object sync = new object();
+
+        public static string FilePath { get; private set; }
+
+        public static void Open(string path)
+        {
+            try
+            {
+                writer = new StreamWriter(path, false) { AutoFlush = true };
+                FilePath = path;
+            }
+            catch
+            {
+                /* Folder not writable, fall back to the temp folder */
+                FilePath = Path.Combine(Path.GetTempPath(), "MapTest.log");
+                try
+                {
+                    writer = new StreamWriter(FilePath, false) { AutoFlush = true };
+                }
+                catch
+                {
+                    FilePath = "(unable to create log file)";
+                }
+            }
+        }
+
+        public static void Close()
+        {
+            lock (sync)
+            {
+                writer?.Dispose();
+                writer = null;
+            }
+        }
+
+        public static void Info(string message) => Write("INFO ", message);
+        public static void Warn(string message) => Write("WARN ", message);
+        public static void Error(string message) => Write("ERROR", message);
+        public static void Error(string message, Exception ex) => Write("ERROR", $"{message}{Environment.NewLine}{ex}");
+
+        static void Write(string level, string message)
+        {
+            lock (sync)
+            {
+                writer?.WriteLine($"{DateTime.Now:HH:mm:ss.fff} {level} {message}");
+            }
+        }
     }
 }
