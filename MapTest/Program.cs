@@ -267,26 +267,35 @@ namespace MapTest
                 Console.WriteLine($"Server is running {mapName}");
                 Console.WriteLine("----------------------------");
 
-                /* MBII anti-cheat rejects a client started by anything other than the launcher,
-                   so the launcher is opened with +connect and the user presses Play */
-                bool autoConnect = EnsureLauncherRunning(launcherEXE, $"+connect {serverAddress}");
+                Console.Write("Press Y to launch the client and join, or any other key to connect manually: ");
+                string launchChoice = Console.ReadLine() ?? "";
+                Log.Info($"Launch client choice: '{launchChoice}'");
+
+                if (launchChoice.Trim().Equals("y", StringComparison.OrdinalIgnoreCase))
+                {
+                    EnsureLauncherRunning(launcherEXE);
+
+                    Console.WriteLine("Launching Client");
+
+                    var clientStartinfo = new ProcessStartInfo(clientEXE, $"+set fs_game \"MBII\" +connect {serverAddress}");
+                    clientStartinfo.WorkingDirectory = gameDataPath;
+
+                    try
+                    {
+                        StartProcess("Client", clientStartinfo);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Error("Failed to start the client", ex);
+                        Console.WriteLine($"Failed to start the client: {ex.Message}");
+                    }
+                }
 
                 Console.WriteLine(" ");
                 Console.WriteLine("----------------------------");
-                Console.WriteLine("To join:");
-                Console.WriteLine("  1. Press Play in the MBII Launcher");
-
-                if (autoConnect)
-                {
-                    Console.WriteLine("  2. The game should join automatically. If it doesn't, open the console (Shift + ~) and enter:");
-                }
-                else
-                {
-                    Console.WriteLine("  2. Open the console (Shift + ~) and enter:");
-                }
-
+                Console.WriteLine("To connect manually, start MBII from the MBII Launcher, open the console (Shift + ~) and enter:");
                 Console.WriteLine($"       /connect {serverAddress}");
-                Console.WriteLine("Keep this window and the launcher open while testing.");
+                Console.WriteLine("Keep this window open while testing.");
                 Console.WriteLine("----------------------------");
                 Console.WriteLine($"Log written to {Log.FilePath}");
 
@@ -379,33 +388,21 @@ namespace MapTest
         }
 
         /* MBII anti-cheat requires the MBII Launcher to be open while the client runs */
-        /* Returns true if the launcher was started by us with launcherArgs */
-        static bool EnsureLauncherRunning(string launcherEXE, string launcherArgs)
+        /* MBII anti-cheat requires the MBII Launcher to be open while the client runs */
+        static void EnsureLauncherRunning(string launcherEXE)
         {
-            string launcherName = Path.GetFileNameWithoutExtension(launcherEXE);
-            var running = Process.GetProcessesByName(launcherName);
-
+            var running = Process.GetProcessesByName(Path.GetFileNameWithoutExtension(launcherEXE));
             if (running.Length > 0)
             {
                 Log.Info($"MBII Launcher already running (PID {string.Join(", ", running.Select(p => p.Id))})");
-                Console.WriteLine("MBII Launcher is already running, so it can't be told to join the test server automatically.");
-                Console.WriteLine("Close the launcher and press Enter to have MapTest reopen it with auto-connect,");
-                Console.WriteLine("or just press Enter to keep it open and connect manually");
-                Console.ReadLine();
-
-                running = Process.GetProcessesByName(launcherName);
-                if (running.Length > 0)
-                {
-                    Log.Info("MBII Launcher left open, user will connect manually");
-                    return false;
-                }
+                Console.WriteLine("MBII Launcher is already running");
+                return;
             }
 
-            Console.WriteLine($"Starting MBII Launcher with {launcherArgs}");
+            Console.WriteLine("Starting MBII Launcher");
 
             var startinfo = new ProcessStartInfo();
             startinfo.FileName = launcherEXE;
-            startinfo.Arguments = launcherArgs;
             startinfo.WorkingDirectory = Path.GetDirectoryName(launcherEXE);
             startinfo.UseShellExecute = true;
 
@@ -419,13 +416,13 @@ namespace MapTest
                 Console.WriteLine($"Failed to start the MBII Launcher: {ex.Message}");
                 Console.WriteLine("Start it yourself, leave it open, then press Enter to continue");
                 Console.ReadLine();
-                return false;
+                return;
             }
 
             Console.WriteLine("Wait for the launcher to finish loading/updating, leave it open, then press Enter to continue");
             Console.ReadLine();
 
-            running = Process.GetProcessesByName(launcherName);
+            running = Process.GetProcessesByName(Path.GetFileNameWithoutExtension(launcherEXE));
             if (running.Length > 0)
             {
                 Log.Info($"MBII Launcher is running (PID {string.Join(", ", running.Select(p => p.Id))})");
@@ -434,8 +431,6 @@ namespace MapTest
             {
                 Log.Warn("MBII Launcher is not running after the user pressed Enter, the client may fail anti-cheat");
             }
-
-            return true;
         }
 
         static Process StartProcess(string name, ProcessStartInfo startinfo)
